@@ -7,6 +7,8 @@ The goal of this homework is to implement and benchmark a simple parallel SpMV k
 ## Build Instructions ##
 To build the driver program, run the following
 
+`module load cmake/3.30.2` (on the Perlmutter)
+
 `mkdir build && cd build`
 
 `cmake ..`
