@@ -41,7 +41,11 @@ To complete this assignment, the following things are required.
 
 1. You must implement and SpMV kernel that runs on the GPU and passes correctness tests for the `n16`, `stomach` and `delaunay_n22` matrices. 
 
-2. You must compare the throughput in terms of GFLOPS/s of your SpMV kernel to that of cuSPARSE for at least the `stomach` and `delaunay_n22` matrices. For this, you can simply use the numbers reported by `test_spmv`. Note that you do not have to beat or match theperformance of cuSPARSE. Benchmarking additional large matrices is encouraged but not required. 
+2. You must compare the throughput in terms of GFLOPS/s of your SpMV kernel to that of cuSPARSE for at least the `stomach` and `delaunay_n22` matrices. For this, you can simply use the numbers reported by `test_spmv`. Note that you do not have to beat or match theperformance of cuSPARSE. Benchmarking additional large matrices is encouraged but not required.
+3. Report. Provide a report in PDF format that describes your SpMV kernel implementation. You may include the following:
+   - Description of your SpMV kernel implementation.
+   - Discussion of the parallelization strategy and optimization techniques you used or considered.
+   - Performance evaluation of your implementation, including the comparison of your SpMV kernel to cuSPARSE.
 
 ## Important Files ## 
 The main file that you'll need to work with is `include/spmv.cuh`. This file contains the template SpMV kernel that you'll need to implement. Within this file, there are two importation functions
