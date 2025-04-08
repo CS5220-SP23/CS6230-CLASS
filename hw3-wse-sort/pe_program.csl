@@ -1,0 +1,219 @@
+// Parameters
+param memcpy_params: comptime_struct;
+param odd_x: bool;
+param odd_y: bool;
+
+param north_rx: color;
+param north_tx: color;
+param south_rx: color;
+param south_tx: color;
+param east_rx : color;
+param east_tx : color;
+param west_rx : color;
+param west_tx : color;
+
+param border_north: bool;
+param border_east:  bool;
+param border_south: bool;
+param border_west:  bool;
+
+// dx and dy are in {x \in N | x mod 2 == 0 \wedge x \leq 4}
+param dx: u32;
+param dy: u32;
+
+// Imports
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const timestamp = @import_module("<time>");
+const prt = @import_module("<simprint>");
+
+
+// Queue IDs
+const north_oq = @get_output_queue(2);
+const north_iq = @get_input_queue(2);
+const east_oq = @get_output_queue(3);
+const east_iq = @get_input_queue(3);
+const south_oq = @get_output_queue(4);
+const south_iq = @get_input_queue(4);
+const west_oq = @get_output_queue(5);
+const west_iq = @get_input_queue(5);
+
+
+// Globals
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+var ptr_tsc_end: [*]u16 = &tscEndBuffer;
+var ptr_tsc_start: [*]u16 = &tscStartBuffer;
+
+var data = @zeros([dy, dx]u32);
+var ptr_data: [*]u32 = &data;
+
+const odd_tile = odd_x != odd_y;
+
+// DSRs
+const dsd_north_tx = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = north_tx, .output_queue = north_oq });
+const dsd_east_tx  = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = east_tx,  .output_queue = east_oq });
+const dsd_south_tx = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = south_tx, .output_queue = south_oq });
+const dsd_west_tx  = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = west_tx,  .output_queue = west_oq});
+
+const dsd_north_rx = @get_dsd(fabin_dsd, .{ .extent = 1, .fabric_color = north_rx, .input_queue = north_iq });
+const dsd_east_rx  = @get_dsd(fabin_dsd, .{ .extent = 1, .fabric_color = east_rx,  .input_queue = east_iq });
+const dsd_south_rx = @get_dsd(fabin_dsd, .{ .extent = 1, .fabric_color = south_rx, .input_queue = south_iq });
+const dsd_west_rx  = @get_dsd(fabin_dsd, .{ .extent = 1, .fabric_color = west_rx,  .input_queue = west_iq});
+
+// Shear sort single PHASE:
+// 1. In ever row do desc/asc sort
+// 2. Do col asc sort
+
+const col_sort_task_id: local_task_id = @get_local_task_id(8);
+const row_sort_task_id: local_task_id = @get_local_task_id(9);
+
+inline fn swap(col1: u16, row1: u16, col2: u16, row2: u16, comptime asc: bool) void {
+  var a = data[row1, col1];
+  var b = data[row2, col2];
+  if (asc) {
+    if (a > b) {
+      data[row1, col1] = b;
+      data[row2, col2] = a;
+    }
+  } else {
+    if (a < b) {
+      data[row1, col1] = b;
+      data[row2, col2] = a;
+    }
+  }
+}
+
+
+task row_sort() void {
+  for (@range(u16, 0, dy-1, 2)) |r| {
+    for (@range(u16, 0, dx-1, 2)) |c| {
+      swap(c, r, c + 1, r, true); // left
+      swap(c, r + 1, c + 1, r + 1, false); // right
+    }
+    for (@range(u16, 1, dx-1, 2)) |c| {
+      swap(c, r, c + 1, r, true); // left
+      swap(c, r + 1, c + 1, r + 1, false); // right
+    }
+  }
+
+  var tmp: u32;
+  for (@range(u16, 0, dy, 2)) |c| {
+    // Even
+    // TX
+    if (!border_east) {
+      @mov32(dsd_east_tx, data[c, dx-1]);
+    }
+    if (!border_west) {
+      @mov32(dsd_west_tx, data[c, 0]);
+    }
+    // RX
+    if (!border_east) {
+      @mov32(&tmp, dsd_east_rx);
+      var a = data[c, dx-1];
+      if (a > tmp) {
+        data[c, dx-1] = tmp;
+      }
+    }
+    if (!border_west) {
+      @mov32(&tmp, dsd_west_rx);
+      var a = data[c, 0];
+      if (a < tmp) {
+        data[c, 0] = tmp;
+      }
+    }
+
+    // Odd
+    // TX
+    if (!border_east) {
+      @mov32(dsd_east_tx, data[c+1, dx-1]);
+    }
+    if (!border_west) {
+      @mov32(dsd_west_tx, data[c+1, 0]);
+    }
+    // RX
+    if (!border_east) {
+      @mov32(&tmp, dsd_east_rx);
+      var a = data[c+1, dx-1];
+      if (a < tmp) {
+        data[c+1, dx-1] = tmp;
+      }
+    }
+    if (!border_west) {
+      @mov32(&tmp, dsd_west_rx);
+      var a = data[c+1, 0];
+      if (a > tmp) {
+        data[c+1, 0] = tmp;
+      }
+    }
+  }
+  sys_mod.unblock_cmd_stream();
+}
+
+task col_sort() void {
+  // Inner sort
+  for (@range(u16, 0, dx, 1)) |c| {
+    for (@range(u16, 0, dy - 1, 2)) |r| {
+      swap(c, r, c, r + 1, true);
+    }
+    for (@range(u16, 1, dy - 1, 2)) |r| {
+      swap(c, r, c, r + 1, true);
+    }
+  }
+
+  var tmp: u32;
+  for (@range(u16, 0, dx, 1)) |r| {
+    // HW2.0: Implement the communication here
+  }
+
+  // HW2.1: Must be removed after HW2.1 because row_sort
+  // is last taskt to be invoked and is already present
+  // at the end of row_sort.
+  sys_mod.unblock_cmd_stream(); 
+  // HW2.1: Invoke the row_sort local_task here
+}
+
+comptime {
+  @bind_local_task(col_sort, col_sort_task_id);
+  @bind_local_task(row_sort, row_sort_task_id);
+}
+
+fn f_init() void {
+   // You can place one time initialization code here
+   timestamp.enable_tsc();
+   sys_mod.unblock_cmd_stream();
+}
+
+fn f_step() void {
+   timestamp.get_timestamp(&tscStartBuffer);
+   @activate(col_sort_task_id);
+}
+
+fn f_sync() void {
+   timestamp.get_timestamp(&tscEndBuffer);
+   sys_mod.unblock_cmd_stream();
+}
+
+// Routes
+comptime {
+  @initialize_queue(north_oq, .{ .color = north_tx });
+  @initialize_queue(north_iq, .{ .color = north_rx });
+  @initialize_queue(east_oq,  .{ .color = east_tx });
+  @initialize_queue(east_iq,  .{ .color = east_rx });
+  @initialize_queue(south_oq, .{ .color = south_tx });
+  @initialize_queue(south_iq, .{ .color = south_rx });
+  @initialize_queue(west_oq,  .{ .color = west_tx });
+  @initialize_queue(west_iq,  .{ .color = west_rx });
+
+  // HW1.1: Create the correct routing table
+  // @set_local_color_config(north_tx, .{ .routes = .{ ... }});
+}
+
+// RPC
+comptime{
+  @export_symbol(ptr_data, "data");
+  @export_symbol(ptr_tsc_start, "tsc_t0");
+  @export_symbol(ptr_tsc_end, "tsc_t1");
+  @export_symbol(f_init);
+  @export_symbol(f_step);
+  @export_symbol(f_sync);
+}

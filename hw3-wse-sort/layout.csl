@@ -1,0 +1,82 @@
+// color/ task ID map
+//
+//  ID var              ID var             ID var                ID var
+//   0                   9                 18                    27 reserved (memcpy)
+//   1                  10                 19                    28 reserved (memcpy)
+//   2                  11                 20                    29 reserved
+//   3                  12                 21 reserved (memcpy)  30 reserved (memcpy)
+//   4                  13                 22 reserved (memcpy)  31 reserved
+//   5                  14                 23 reserved (memcpy)  32
+//   6                  15                 24                    33
+//   7                  16                 25                    34
+//   8                  17                 26                    35
+//
+
+// total elements = Px * dx * Py * dx
+param Px: u16; // kernel width
+param dx: u16; // number of elements in x per PE
+param Py: u16; // kernel height
+param dy: u16; // number of elements in y per PE
+
+// Colors in the X direction
+const x_a: color = @get_color(0);
+const x_b: color = @get_color(1);
+const x_c: color = @get_color(2);
+const x_d: color = @get_color(3);
+
+// Colors in the Y direction
+const y_a: color = @get_color(4);
+const y_b: color = @get_color(5);
+const y_c: color = @get_color(6);
+const y_d: color = @get_color(7);
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = Px,
+  .height = Py
+});
+
+layout {
+  @set_rectangle(Px, Py);
+
+  var x: u16 = 0;
+  while (x < Px) : (x += 1) {
+    var y: u16 = 0;
+    while (y < Py) : (y += 1) {
+      const memcpy_params = memcpy.get_params(x);
+      const odd_x = x % 2 == 1;
+      const odd_y = y % 2 == 1;
+
+      // HW1.0: Assign colors for PEs
+      // Use the constants: x_* and y_*
+      // Hint: C-Style ternary operator is "if (expr) val else val2"
+      @set_tile_code(x, y, "pe_program.csl", .{
+        .memcpy_params = memcpy_params,
+        .dx = dx,
+        .dy = dy,
+        .odd_x = odd_x,
+        .odd_y = odd_y,
+        .north_rx = ,
+        .south_tx = ,
+        .south_rx = ,
+        .north_tx = ,
+        .east_rx  = ,
+        .east_tx  = ,
+        .west_rx  = ,
+        .west_tx  = ,
+        .border_north = y == 0,
+        .border_east  = x == Px - 1,
+        .border_south = y == Py - 1,
+        .border_west  = x == 0,
+       });
+    }
+  }
+
+  // export symbol name
+  @export_name("data", [*]u32, true);
+  @export_name("tsc_t0", [*]u16, true);
+  @export_name("tsc_t1", [*]u16, true);
+
+  @export_name("f_init", fn()void);
+  @export_name("f_sync", fn()void);
+  @export_name("f_step", fn()void);
+}
